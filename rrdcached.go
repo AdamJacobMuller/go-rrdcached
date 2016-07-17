@@ -19,6 +19,7 @@ type Rrdcached struct {
 	Socket   string
 	Ip       string
 	Port     int64
+	Batch    bool
 	Conn     net.Conn
 	Rrdio    RRDIO
 }
@@ -28,6 +29,7 @@ func ConnectToSocket(socket string) (*Rrdcached, error) {
 		Protocol: "unix",
 		Socket:   socket,
 		Rrdio:    &dataTransport{},
+		Batch:    false,
 	}
 	err := driver.connect()
 	return driver, err
@@ -39,6 +41,7 @@ func ConnectToIP(ip string, port int64) (*Rrdcached, error) {
 		Ip:       ip,
 		Port:     port,
 		Rrdio:    &dataTransport{},
+		Batch:    false,
 	}
 	driver.connect()
 	err := driver.connect()
@@ -242,12 +245,72 @@ func (r *Rrdcached) write(data string) error {
 	return r.Rrdio.WriteData(r.Conn, data)
 }
 
+type BatchResponse struct {
+	Responses []*Response
+}
+
 type Response struct {
 	Status  int
 	Message string
 	Raw     string
+	Error   error
 }
 
+func (r *Rrdcached) checkBatchResponse() (*BatchResponse, error) {
+	data, err := r.read()
+	if err != nil {
+		return nil, err
+	}
+
+	data = strings.TrimSpace(data)
+	fmt.Printf("data = %s\n", data)
+
+	lines := strings.Split(data, "\n")
+	fmt.Printf("lines = %s\n", lines)
+
+	parts := strings.SplitN(lines[0], " ", 2)
+
+	errCount, _ := strconv.ParseInt(parts[0], 10, 0)
+	fmt.Printf("errCount = %s\n", errCount)
+
+	responses := BatchResponse{}
+	for i := int64(0); i < errCount; i++ {
+		response, err := r.parseResponseLine(lines[i+1])
+		if err != nil {
+			fmt.Printf("unable to parse line %s err=%s\n", lines[i+1], err)
+			continue
+		}
+		responses.Responses = append(responses.Responses, response)
+	}
+
+	return &responses, err
+}
+
+func (r *Rrdcached) parseResponseLine(line string) (*Response, error) {
+	parts := strings.SplitN(line, " ", 2)
+
+	status, _ := strconv.ParseInt(parts[0], 10, 0)
+
+	var err error
+
+	if int(status) == -1 {
+		err = errors.New(parts[1])
+		switch {
+		case strings.HasPrefix(parts[1], "Unknown command"):
+			err = &UnknownCommandError{err}
+		case strings.HasPrefix(parts[1], "No such file"):
+			err = &FileDoesNotExistError{err}
+		case strings.Contains(parts[1], "can't parse argument"):
+			err = &UnrecognizedArgumentError{err}
+		}
+	}
+
+	return &Response{
+		Status:  int(status),
+		Message: parts[1],
+		Error:   err,
+	}, err
+}
 func (r *Rrdcached) checkResponse() (*Response, error) {
 	data, err := r.read()
 	if err != nil {
@@ -300,7 +363,22 @@ func (r *Rrdcached) GetStats() (*Stats, error) {
 	return parseStats(data), readErr
 }
 
+func (r *Rrdcached) CreateFromBatchResponses(batchResponse *BatchResponse, start int64, step int64, overwrite bool, ds []string, rra []string) (*Response, error) {
+	for i := 0; i < len(batchResponse.Responses); i++ {
+		if strings.HasPrefix(batchResponse.Responses[i].Message, "No such file: ") {
+			filename := strings.Replace(batchResponse.Responses[i].Message, "No such file: ", "", 1)
+			r.Create(filename, start, step, overwrite, ds, rra)
+		} else {
+			fmt.Printf("'%s' does not start with '%s'\n", batchResponse.Responses[i].Message, "No such file: ")
+		}
+	}
+	return nil, nil
+}
+
 func (r *Rrdcached) Create(filename string, start int64, step int64, overwrite bool, ds []string, rra []string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Create() called while in batch mode")
+	}
 	var params []string
 	if start >= 0 {
 		params = append(params, fmt.Sprintf("-b %d", start))
@@ -326,6 +404,9 @@ func (r *Rrdcached) Create(filename string, start int64, step int64, overwrite b
 }
 
 func (r *Rrdcached) Update(filename string, values ...string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Update() called while in batch mode")
+	}
 	err := r.write("UPDATE " + filename + " " + strings.Join(values, " ") + "\n")
 	if err != nil {
 		return nil, err
@@ -334,6 +415,9 @@ func (r *Rrdcached) Update(filename string, values ...string) (*Response, error)
 }
 
 func (r *Rrdcached) Pending(filename string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Pending() called while in batch mode")
+	}
 	err := r.write("PENDING " + filename + "\n")
 	if err != nil {
 		return nil, err
@@ -342,6 +426,9 @@ func (r *Rrdcached) Pending(filename string) (*Response, error) {
 }
 
 func (r *Rrdcached) Forget(filename string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Forget() called while in batch mode")
+	}
 	err := r.write("FORGET " + filename + "\n")
 	if err != nil {
 		return nil, err
@@ -350,6 +437,9 @@ func (r *Rrdcached) Forget(filename string) (*Response, error) {
 }
 
 func (r *Rrdcached) Flush(filename string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Flush() called while in batch mode")
+	}
 	err := r.write("FLUSH " + filename + "\n")
 	if err != nil {
 		return nil, err
@@ -358,6 +448,9 @@ func (r *Rrdcached) Flush(filename string) (*Response, error) {
 }
 
 func (r *Rrdcached) FlushAll() (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("FlushAll() called while in batch mode")
+	}
 	err := r.write("FLUSHALL\n")
 	if err != nil {
 		return nil, err
@@ -366,6 +459,9 @@ func (r *Rrdcached) FlushAll() (*Response, error) {
 }
 
 func (r *Rrdcached) First(filename string, rraIndex int) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("First() called while in batch mode")
+	}
 	err := r.write("FIRST " + filename + " " + strconv.Itoa(rraIndex) + "\n")
 	if err != nil {
 		return nil, err
@@ -374,11 +470,56 @@ func (r *Rrdcached) First(filename string, rraIndex int) (*Response, error) {
 }
 
 func (r *Rrdcached) Last(filename string) (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("Last() called while in batch mode")
+	}
 	err := r.write("LAST " + filename + "\n")
 	if err != nil {
 		return nil, err
 	}
 	return r.checkResponse()
+}
+
+func (r *Rrdcached) BatchStart() (*Response, error) {
+	if r.Batch == true {
+		return nil, errors.New("BatchStart() called while already in batch mode")
+	}
+	err := r.write("BATCH\n")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.checkResponse()
+	if err == nil {
+		r.Batch = true
+	}
+	return resp, err
+}
+
+func (r *Rrdcached) BatchUpdate(filename string, values ...string) (*Response, error) {
+	if r.Batch == false {
+		return nil, errors.New("BatchUpdate() called while not in batch mode")
+	}
+	err := r.write("UPDATE " + filename + " " + strings.Join(values, " ") + "\n")
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func (r *Rrdcached) BatchFinalize() (*BatchResponse, error) {
+	if r.Batch == false {
+		return nil, errors.New("BatchFinalize() called while not in batch mode")
+	}
+	err := r.write(".\n")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.checkBatchResponse()
+	if err == nil {
+		r.Batch = false
+	}
+	fmt.Printf("responses = %s\n", resp)
+	return resp, err
 }
 
 func (r *Rrdcached) Quit() {
