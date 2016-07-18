@@ -3,6 +3,7 @@ package rrdcached
 import (
 	"errors"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"io"
 	"net"
 	"reflect"
@@ -10,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/golang/glog"
 )
 
 type Rrdcached struct {
@@ -227,8 +226,6 @@ func (rrdio dataTransport) ReadData(r io.Reader) (string, error) {
 }
 
 func (rrdio dataTransport) WriteData(conn net.Conn, data string) error {
-	glog.V(10).Infof("========== %v", data)
-
 	if conn == nil {
 		return &ConnectionError{fmt.Errorf("RRDCacheD is not connected, cannot write data.")}
 	}
@@ -263,21 +260,21 @@ func (r *Rrdcached) checkBatchResponse() (*BatchResponse, error) {
 	}
 
 	data = strings.TrimSpace(data)
-	fmt.Printf("data = %s\n", data)
+	//fmt.Printf("data = %s\n", data)
 
 	lines := strings.Split(data, "\n")
-	fmt.Printf("lines = %s\n", lines)
+	//fmt.Printf("lines = %s\n", lines)
 
 	parts := strings.SplitN(lines[0], " ", 2)
 
 	errCount, _ := strconv.ParseInt(parts[0], 10, 0)
-	fmt.Printf("errCount = %s\n", errCount)
+	//fmt.Printf("errCount = %s\n", errCount)
 
 	responses := BatchResponse{}
 	for i := int64(0); i < errCount; i++ {
 		response, err := r.parseResponseLine(lines[i+1])
 		if err != nil {
-			fmt.Printf("unable to parse line %s err=%s\n", lines[i+1], err)
+			log.WithFields(log.Fields{"line": lines[i+1], "err": err}).Error("Unable to parse response line")
 			continue
 		}
 		responses.Responses = append(responses.Responses, response)
@@ -318,7 +315,6 @@ func (r *Rrdcached) checkResponse() (*Response, error) {
 	}
 
 	data = strings.TrimSpace(data)
-	glog.V(10).Infof(data)
 
 	lines := strings.SplitN(data, " ", 2)
 
@@ -518,7 +514,7 @@ func (r *Rrdcached) BatchFinalize() (*BatchResponse, error) {
 	if err == nil {
 		r.Batch = false
 	}
-	fmt.Printf("responses = %s\n", resp)
+	//fmt.Printf("responses = %s\n", resp)
 	return resp, err
 }
 
