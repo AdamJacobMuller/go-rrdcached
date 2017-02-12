@@ -216,7 +216,11 @@ func (rrdio dataTransport) ReadData(r io.Reader) (string, error) {
 			}
 			// More lines are expected, do we have them all yet?
 			lines := strings.Split(data, "\n")
-			if uint64(len(lines)) >= (status + 1) {
+
+			if uint64(len(lines)) == (status + 2) {
+				break
+			} else if uint64(len(lines)) >= (status + 2) {
+				log.WithFields(log.Fields{"lines": len(lines), "status": status}).Error("have too many lines")
 				break
 			}
 		}
@@ -253,6 +257,21 @@ type Response struct {
 	Error   error
 }
 
+func (r *Response) Filename() (string, error) {
+	if r.IsMissing() == false {
+		return "", errors.New("Response is not a missing file")
+	}
+	return strings.Replace(r.Message, "No such file: ", "", 1), nil
+}
+
+func (r *Response) IsMissing() bool {
+	if strings.HasPrefix(r.Message, "No such file: ") {
+		return true
+	} else {
+		return false
+	}
+}
+
 func (r *Rrdcached) checkBatchResponse() (*BatchResponse, error) {
 	data, err := r.read()
 	if err != nil {
@@ -267,8 +286,16 @@ func (r *Rrdcached) checkBatchResponse() (*BatchResponse, error) {
 
 	parts := strings.SplitN(lines[0], " ", 2)
 
-	errCount, _ := strconv.ParseInt(parts[0], 10, 0)
-	//fmt.Printf("errCount = %s\n", errCount)
+	errCount, err := strconv.ParseInt(parts[0], 10, 0)
+
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "line": lines[0]}).Error("unable to convert errorCount to integer")
+		return nil, errors.New("unable to convert errorCount to integer")
+	}
+
+	if len(lines) < int(errCount) {
+		panic("len(lines) < errCount")
+	}
 
 	responses := BatchResponse{}
 	for i := int64(0); i < errCount; i++ {
@@ -286,9 +313,18 @@ func (r *Rrdcached) checkBatchResponse() (*BatchResponse, error) {
 func (r *Rrdcached) parseResponseLine(line string) (*Response, error) {
 	parts := strings.SplitN(line, " ", 2)
 
-	status, _ := strconv.ParseInt(parts[0], 10, 0)
+	if len(parts) < 2 {
+		log.WithFields(log.Fields{"line": line}).Error("parseResponseLine(): invalid response line")
+		return nil, errors.New("invalid response line")
+	}
 
 	var err error
+
+	status, err := strconv.ParseInt(parts[0], 10, 0)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "line": line}).Error("parseResponseLine(): unable to convert status to integer")
+		return nil, errors.New("unable to convert status to integer")
+	}
 
 	if int(status) == -1 {
 		err = errors.New(parts[1])
@@ -318,7 +354,16 @@ func (r *Rrdcached) checkResponse() (*Response, error) {
 
 	lines := strings.SplitN(data, " ", 2)
 
-	status, _ := strconv.ParseInt(lines[0], 10, 0)
+	if len(lines) < 2 {
+		log.WithFields(log.Fields{"data": data}).Error("checkResponse(): invalid response line")
+		return nil, errors.New("invalid response line")
+	}
+
+	status, err := strconv.ParseInt(lines[0], 10, 0)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "data": data}).Error("checkResponse(): unable to convert status to integer")
+		return nil, errors.New("unable to convert status to integer")
+	}
 
 	if int(status) == -1 {
 		err = errors.New(lines[1])
@@ -403,7 +448,7 @@ func (r *Rrdcached) Update(filename string, values ...string) (*Response, error)
 	if r.Batch == true {
 		return nil, errors.New("Update() called while in batch mode")
 	}
-	err := r.write("UPDATE " + filename + " " + strings.Join(values, " ") + "\n")
+	err := r.write("UPDATE " + filename + " " + strings.Join(values, ":") + "\n")
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +540,7 @@ func (r *Rrdcached) BatchUpdate(filename string, values ...string) (*Response, e
 	if r.Batch == false {
 		return nil, errors.New("BatchUpdate() called while not in batch mode")
 	}
-	err := r.write("UPDATE " + filename + " " + strings.Join(values, " ") + "\n")
+	err := r.write("UPDATE " + filename + " " + strings.Join(values, ":") + "\n")
 	if err != nil {
 		return nil, err
 	}
