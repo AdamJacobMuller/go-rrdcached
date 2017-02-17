@@ -437,7 +437,7 @@ func (r *Rrdcached) Create(filename string, start int64, step int64, overwrite b
 		params = append(params, strings.Join(rra, " "))
 	}
 
-	err := r.write("CREATE " + filename + " " + strings.Join(params, " ") + "\n")
+	err := r.write(fmt.Sprintf("CREATE %s %s\n", filename, strings.Join(params, " ")))
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (r *Rrdcached) Update(filename string, values ...string) (*Response, error)
 	if r.Batch == true {
 		return nil, errors.New("Update() called while in batch mode")
 	}
-	err := r.write("UPDATE " + filename + " " + strings.Join(values, ":") + "\n")
+	err := r.write(fmt.Sprintf("UPDATE %s %s\n", filename, strings.Join(values, ":")))
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +459,7 @@ func (r *Rrdcached) Pending(filename string) (*Response, error) {
 	if r.Batch == true {
 		return nil, errors.New("Pending() called while in batch mode")
 	}
-	err := r.write("PENDING " + filename + "\n")
+	err := r.write(fmt.Sprintf("PENDING %s\n", filename))
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +470,7 @@ func (r *Rrdcached) Forget(filename string) (*Response, error) {
 	if r.Batch == true {
 		return nil, errors.New("Forget() called while in batch mode")
 	}
-	err := r.write("FORGET " + filename + "\n")
+	err := r.write(fmt.Sprintf("FORGET %s\n", filename))
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +481,7 @@ func (r *Rrdcached) Flush(filename string) (*Response, error) {
 	if r.Batch == true {
 		return nil, errors.New("Flush() called while in batch mode")
 	}
-	err := r.write("FLUSH " + filename + "\n")
+	err := r.write(fmt.Sprintf("FLUSH %s\n", filename))
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +503,7 @@ func (r *Rrdcached) First(filename string, rraIndex int) (*Response, error) {
 	if r.Batch == true {
 		return nil, errors.New("First() called while in batch mode")
 	}
-	err := r.write("FIRST " + filename + " " + strconv.Itoa(rraIndex) + "\n")
+	err := r.write(fmt.Sprintf("FIRST %s %s\n", filename, strconv.Itoa(rraIndex)))
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +540,7 @@ func (r *Rrdcached) BatchUpdate(filename string, values ...string) (*Response, e
 	if r.Batch == false {
 		return nil, errors.New("BatchUpdate() called while not in batch mode")
 	}
-	err := r.write("UPDATE " + filename + " " + strings.Join(values, ":") + "\n")
+	err := r.write(fmt.Sprintf("UPDATE %s %s\n", filename, strings.Join(values, ":")))
 	if err != nil {
 		return nil, err
 	}
